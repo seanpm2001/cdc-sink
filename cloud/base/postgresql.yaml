@@ -1,0 +1,81 @@
+# This file defines a general template for running a single instance of
+# PostgreSQL.
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgresql
+  labels:
+    app: postgresql
+spec:
+  ports:
+    - port: 5432
+      targetPort: 5432
+      name: postgresql
+  selector:
+    app: postgresql
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgresql-data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: premium-rwo # Use SSD
+  resources:
+    requests:
+      storage: 100Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgresql
+  labels:
+    app: postgresql
+spec:
+  selector:
+    matchLabels:
+      app: postgresql
+  replicas: 0 # Replica count must bo set via kustomize.
+  template:
+    metadata:
+      name: postgresql
+      labels:
+        app: postgresql
+    spec:
+      containers:
+        - name: postgresql
+          image: postgres:14
+          imagePullPolicy: IfNotPresent
+          args:
+            - -c
+            - wal_level=logical
+          ports:
+            - name: postgresql
+              containerPort: 5432
+              protocol: TCP
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef: # Injected by Kustomize
+                  name: source-db-secrets
+                  key: username
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef: # Injected by Kustomize
+                  name: source-db-secrets
+                  key: password
+            - name: PGDATA
+              value: /data/data # container refuses to use the mountpoint, must have a subdirectory
+          readinessProbe:
+            tcpSocket:
+              port: 5432
+          volumeMounts:
+            - mountPath: /data
+              name: postgresql-data
+      volumes:
+        - name: postgresql-data
+          persistentVolumeClaim:
+            claimName: postgresql-data
+
