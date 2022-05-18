@@ -1,6 +1,40 @@
-# This file contains copy of the reference StatefulSet deployment
-# for CockroachDB.
-
+# This file contains copy of the bring-your-own-certs StatefulSet
+# deployment for CockroachDB.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cockroachdb
+  labels:
+    app: cockroachdb
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: cockroachdb
+  labels:
+    app: cockroachdb
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - secrets
+    verbs:
+      - get
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cockroachdb
+  labels:
+    app: cockroachdb
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: cockroachdb
+subjects:
+  - kind: ServiceAccount
+    name: cockroachdb
+---
 apiVersion: v1
 kind: Service
 metadata:
@@ -10,6 +44,7 @@ metadata:
   labels:
     app: cockroachdb
 spec:
+  type: ClusterIP
   ports:
     # The main port, served by gRPC, serves Postgres-flavor SQL, internode
     # traffic and the cli.
@@ -77,15 +112,16 @@ metadata:
   name: cockroachdb
 spec:
   serviceName: "cockroachdb"
+  replicas: 0 # Set by kustomization.
   selector:
     matchLabels:
       app: cockroachdb
-  replicas: 0 # Replica count must bo set via kustomize.
   template:
     metadata:
       labels:
         app: cockroachdb
     spec:
+      serviceAccountName: cockroachdb
       affinity:
         podAntiAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:
@@ -100,15 +136,15 @@ spec:
                 topologyKey: kubernetes.io/hostname
       containers:
         - name: cockroachdb
-          image: cockroachdb/cockroach
+          image: cockroachdb/cockroach # Tag set by kustomization.
           imagePullPolicy: Always
           resources:
             requests:
-              cpu: "4"
-              memory: "16Gi"
+              cpu: "2"
+              memory: "8Gi"
             limits:
-              cpu: "4"
-              memory: "16Gi"
+              cpu: "2"
+              memory: "8Gi"
           ports:
             - containerPort: 26257
               name: grpc
@@ -118,12 +154,15 @@ spec:
             httpGet:
               path: "/health?ready=1"
               port: http
+              scheme: HTTPS
             initialDelaySeconds: 10
             periodSeconds: 5
             failureThreshold: 2
           volumeMounts:
             - name: datadir
               mountPath: /cockroach/cockroach-data
+            - name: certs
+              mountPath: /cockroach/cockroach-certs
           env:
             - name: GOMAXPROCS
               valueFrom:
@@ -144,7 +183,7 @@ spec:
               /cockroach/cockroach
               start
               --logtostderr
-              --insecure
+              --certs-dir /cockroach/cockroach-certs
               --advertise-host $(hostname -f)
               --http-addr 0.0.0.0
               --join cockroachdb-0.cockroachdb,cockroachdb-1.cockroachdb,cockroachdb-2.cockroachdb
@@ -157,6 +196,10 @@ spec:
         - name: datadir
           persistentVolumeClaim:
             claimName: datadir
+        - name: certs
+          secret:
+            secretName: cockroachdb.node
+            defaultMode: 256
   podManagementPolicy: Parallel
   updateStrategy:
     type: RollingUpdate
