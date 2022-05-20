@@ -154,15 +154,16 @@ spec:
             httpGet:
               path: "/health?ready=1"
               port: http
-              scheme: HTTPS
+              scheme: HTTP
             initialDelaySeconds: 10
             periodSeconds: 5
             failureThreshold: 2
           volumeMounts:
             - name: datadir
               mountPath: /cockroach/cockroach-data
-            - name: certs
-              mountPath: /cockroach/cockroach-certs
+          # TODO(bob): Build Kustomize plugin to populate the secrets.
+          #            - name: certs
+          #              mountPath: /cockroach/cockroach-certs
           env:
             - name: GOMAXPROCS
               valueFrom:
@@ -174,6 +175,8 @@ spec:
                 resourceFieldRef:
                   resource: limits.memory
                   divisor: "1Mi"
+            - name: COCKROACH_SERVICE
+              value: cockroachdb # Replaced by Kustomize in other leaf configs.
           command:
             - "/bin/bash"
             - "-ecx"
@@ -183,10 +186,10 @@ spec:
               /cockroach/cockroach
               start
               --logtostderr
-              --certs-dir /cockroach/cockroach-certs
+              --insecure
               --advertise-host $(hostname -f)
               --http-addr 0.0.0.0
-              --join cockroachdb-0.cockroachdb,cockroachdb-1.cockroachdb,cockroachdb-2.cockroachdb
+              --join ${COCKROACH_SERVICE}-0.${COCKROACH_SERVICE}
               --cache $(expr $MEMORY_LIMIT_MIB / 4)MiB
               --max-sql-memory $(expr $MEMORY_LIMIT_MIB / 4)MiB
       # No pre-stop hook is required, a SIGTERM plus some time is all that's
@@ -196,10 +199,11 @@ spec:
         - name: datadir
           persistentVolumeClaim:
             claimName: datadir
-        - name: certs
-          secret:
-            secretName: cockroachdb.node
-            defaultMode: 256
+  # TODO(bob): Kustomize plugin to generate certs.
+  #        - name: certs
+  #          secret:
+  #            secretName: cockroachdb.node
+  #            defaultMode: 256
   podManagementPolicy: Parallel
   updateStrategy:
     type: RollingUpdate

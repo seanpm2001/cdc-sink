@@ -1,0 +1,19 @@
+resources:
+  - ../../base/cockroachdb/
+nameSuffix: -source
+commonLabels:
+  side: source
+replicas:
+  - name: cockroachdb
+    count: 3
+# Patch an environment variable that feeds the --join flag.
+replacements:
+  - source:
+      kind: Service
+      name: cockroachdb
+    targets:
+      - select:
+          kind: StatefulSet
+          name: cockroachdb
+        fieldPaths:
+          - spec.template.spec.containers.[name=cockroachdb].env.[name=COCKROACH_SERVICE].value

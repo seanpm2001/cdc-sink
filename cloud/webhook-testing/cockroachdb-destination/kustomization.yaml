@@ -1,0 +1,33 @@
+resources:
+  - ../../base/cockroachdb/
+  - cdc-sink.yaml
+nameSuffix: -destination
+commonLabels:
+  side: destination
+replicas:
+  - name: cockroachdb
+    count: 3
+  - name: cdc-sink
+    count: 1
+# Patch an environment variable that feeds the --join flag.
+replacements:
+  - source:
+      kind: Service
+      name: cockroachdb
+    targets:
+      - select:
+          kind: StatefulSet
+          name: cockroachdb
+        fieldPaths:
+          - spec.template.spec.containers.[name=cockroachdb].env.[name=COCKROACH_SERVICE].value
+# Patch anything that needs to talk to the sql endpoints.
+  - source:
+      kind: Service
+      name: cockroachdb-public
+    targets:
+      - select:
+          kind: Deployment
+          name: cdc-sink
+        fieldPaths:
+          - spec.template.spec.containers.[name=cdc-sink].env.[name=COCKROACH_SERVICE].value
+          - spec.template.spec.initContainers.[name=wait-for-cockroach].env.[name=COCKROACH_SERVICE].value

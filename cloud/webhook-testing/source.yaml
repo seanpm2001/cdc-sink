@@ -1,0 +1,29 @@
+# This file defines an ArgoCD application which bootstraps
+# the source cluster.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cockroachdb-source
+  # Deploy app definition into ArgoCD's namespace.
+  namespace: argocd
+  # Enable cascade deletion
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  # Projects are defined within the ArgoCD control plane to scope
+  # access to certain namespaces, destination k8s clusters, etc.
+  project: cdc-sink
+  source:
+    repoURL: https://github.com/cockroachdb/cdc-sink.git
+    targetRevision: argocd
+    path: cloud/webhook-testing/cockroachdb-source
+    kustomize:
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: sink
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

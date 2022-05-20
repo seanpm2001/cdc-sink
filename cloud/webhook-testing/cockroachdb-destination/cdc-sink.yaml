@@ -1,0 +1,86 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: cdc-sink
+  labels:
+    app: cdc-sink
+spec:
+  type: ClusterIP
+  ports:
+    - port: 443
+      targetPort: 443
+      name: https
+  selector:
+    app: cdc-sink
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: cdc-sink-budget
+  labels:
+    app: cdc-sink
+spec:
+  selector:
+    matchLabels:
+      app: cdc-sink
+  minAvailable: 1
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cdc-sink
+spec:
+  selector:
+    matchLabels:
+      app: cdc-sink
+  replicas: 0 # Overridden by kustomization.
+  template:
+    metadata:
+      name: cdc-sink
+      labels:
+        app: cdc-sink
+    spec:
+      initContainers:
+        - name: wait-for-cockroach
+          image: busybox
+          env:
+            - name: COCKROACH_SERVICE
+              value: "Injected by kustomization"
+          command:
+            - "sh"
+            - "-c"
+            - "until nc -z $(COCKROACH_SERVICE) 26257; do echo Waiting for Cockroach; sleep 10; done"
+      containers:
+        - name: cdc-sink
+          image: cockroachdb/cdc-sink:master
+          imagePullPolicy: Always
+          env:
+            - name: COCKROACH_SERVICE
+              value: "Injected by kustomization"
+            - name: CONN_STRING
+              value: "postgresql://root@$(COCKROACH_SERVICE):26257/?sslmode=disable"
+          args:
+            - "start"
+            - "--bindAddr"
+            - ":443"
+            - "--conn"
+            - "$(CONN_STRING)"
+            - "--disableAuthentication"
+            - "--logFormat"
+            - "fluent"
+            - "--tlsSelfSigned"
+          ports:
+            - containerPort: 443
+              name: https
+          resources:
+            limits:
+              memory: "2Gi"
+              cpu: "2"
+            requests:
+              memory: "2Gi"
+              cpu: "2"
+          readinessProbe:
+            httpGet:
+              port: https
+              path: "/_/healthz"
+              scheme: HTTPS

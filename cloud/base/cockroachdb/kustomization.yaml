@@ -1,0 +1,6 @@
+# In the images section, we'll override for specific versions.
+images:
+  - name: cockroachdb/cockroach
+    newTag: latest-v21.2
+resources:
+  - cockroachdb.yaml

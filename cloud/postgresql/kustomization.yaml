@@ -1,9 +1,0 @@
-namespace: postgresql
-resources:
-  - namespace.yaml
-  - ../base
-replicas:
-  - name: cockroachdb
-    count: 3
-  - name: postgresql
-    count: 1

@@ -1,17 +1,12 @@
-commonLabels:
-  app.kubernetes.io/part-of: cdc-sink
 secretGenerator:
-  - name: source-db-secrets
+  - name: postgresql-secrets
     behavior: create
     literals:
       - username=source_db_user
       - password=SoupOrSecret
 # In the images section, we'll override for specific versions.
 images:
-  - name: cockroachdb/cockroach
-    newTag: latest-v21.2
   - name: postgres
     newTag: "14"
 resources:
-  - cockroachdb.yaml
   - postgresql.yaml
