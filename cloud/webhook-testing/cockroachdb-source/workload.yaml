@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: workload
+  labels:
+    app: workload
+spec:
+  replicas: 0 # Set by kustomization.
+  selector:
+    matchLabels:
+      app: workload
+  template:
+    metadata:
+      name: workload
+      labels:
+        app: workload
+    spec:
+      initContainers:
+        - name: load-fixtures
+          image: cockroachdb/cockroach
+          imagePullPolicy: Always
+          command:
+            - "/bin/bash"
+            - "-ecx"
+            - found=$$(cockroach sql --insecure -e "show databases" --url $(CONNECT_STRING) | grep tpcc) ;
+              if [ -n "${found}" ] ; then echo "tpcc database exists"; exit 0; fi ;
+              exec
+              /cockroach/cockroach
+              workload fixtures import tpcc
+              --warehouses=1000
+              --checks=false
+              $(CONNECT_STRING)
+          env:
+            - name: COCKROACH_SERVICE
+              value: "Replaced by kustomize"
+            - name: CONNECT_STRING
+              value: "postgres://root@$(COCKROACH_SERVICE):26257?sslmode=disable"
+      containers:
+        - name: workload
+          image: cockroachdb/cockroach
+          command:
+            - "/bin/bash"
+            - "-ecx"
+            # The use of qualified `hostname -f` is crucial:
+            # Other nodes aren't able to look up the unqualified hostname.
+            - exec
+              /cockroach/cockroach
+              workload run tpcc
+              --max-rate 150
+              --warehouses 1000
+              --ramp 1m
+              --tolerate-errors
+              $(CONNECT_STRING)
+          env:
+            - name: COCKROACH_SERVICE
+              value: "Replaced by kustomize"
+            - name: CONNECT_STRING
+              value: "postgres://root@$(COCKROACH_SERVICE):26257?sslmode=disable"
+          resources:
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+            requests:
+              cpu: "2"
+              memory: "4Gi"
+

@@ -136,6 +136,22 @@ func TestApply(t *testing.T) {
 			a.Contains(err.Error(), "received 3 expect 2")
 		}
 	})
+
+	t.Run("repeated pk", func(t *testing.T) {
+		a := assert.New(t)
+
+		p := Payload{Pk0: 10, Pk1: "10"}
+		bytes, err := json.Marshal(p)
+		a.NoError(err)
+
+		muts := []types.Mutation{
+			{Data: bytes},
+			{Data: bytes},
+		}
+
+		// Verify insertion
+		a.NoError(app.Apply(ctx, dbInfo.Pool(), muts))
+	})
 }
 
 // This is a smoke test, copied from main_test.go to ensure that
@@ -485,6 +501,66 @@ func testConditions(t *testing.T, cas, deadline bool) {
 		lastTime = expectedTime
 		lastVersion = expectedVersion
 	}
+}
+
+// This tests a case in which cdc-sink does not upsert all columns
+// in the target table and where multiple updates to the same key
+// are contained in the batch (e.g. immediate mode). In this case,
+// we'll see an error message that UPSERT cannot affect the same row
+// multiple times.
+//
+// X-Ref: https://github.com/cockroachdb/cockroach/issues/44466
+// X-Ref: https://github.com/cockroachdb/cockroach/pull/45372
+func TestRepeatedKeysWithIgnoredColumns(t *testing.T) {
+	a := assert.New(t)
+	ctx, dbInfo, cancel := sinktest.Context()
+	defer cancel()
+
+	dbName, cancel, err := sinktest.CreateDB(ctx)
+	if !a.NoError(err) {
+		return
+	}
+	defer cancel()
+
+	watchers, cancel := schemawatch.NewWatchers(dbInfo.Pool())
+	defer cancel()
+
+	type Payload struct {
+		Pk0 int    `json:"pk0"`
+		Val string `json:"val"`
+	}
+	tbl, err := sinktest.CreateTable(ctx, dbName,
+		"CREATE TABLE %s (pk0 INT PRIMARY KEY, ignored INT AS (1) STORED, val STRING)")
+	if !a.NoError(err) {
+		return
+	}
+
+	watcher, err := watchers.Get(ctx, dbName)
+	if !a.NoError(err) {
+		return
+	}
+
+	app, cancel, err := newApply(watcher, tbl.Name(), nil /* casColumns */, types.Deadlines{})
+	if !a.NoError(err) {
+		return
+	}
+	defer cancel()
+
+	p1 := Payload{Pk0: 10, Val: "First"}
+	bytes1, err := json.Marshal(p1)
+	a.NoError(err)
+
+	p2 := Payload{Pk0: 10, Val: "Repeated"}
+	bytes2, err := json.Marshal(p2)
+	a.NoError(err)
+
+	muts := []types.Mutation{
+		{Data: bytes1},
+		{Data: bytes2},
+	}
+
+	// Verify insertion
+	a.NoError(app.Apply(ctx, dbInfo.Pool(), muts))
 }
 
 // Ensure that if stored computed columns are present, we don't

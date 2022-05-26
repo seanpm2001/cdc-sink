@@ -1,11 +1,14 @@
 resources:
   - ../../base/cockroachdb/
+  - workload.yaml
 nameSuffix: -source
 commonLabels:
   side: source
 replicas:
   - name: cockroachdb
-    count: 3
+    count: 6
+  - name: workload
+    count: 1
 # Patch an environment variable that feeds the --join flag.
 replacements:
   - source:
@@ -17,3 +20,13 @@ replacements:
           name: cockroachdb
         fieldPaths:
           - spec.template.spec.containers.[name=cockroachdb].env.[name=COCKROACH_SERVICE].value
+  - source:
+      kind: Service
+      name: cockroachdb-public
+    targets:
+      - select:
+          kind: Deployment
+          name: workload
+        fieldPaths:
+          - spec.template.spec.containers.[name=workload].env.[name=COCKROACH_SERVICE].value
+          - spec.template.spec.initContainers.[name=load-fixtures].env.[name=COCKROACH_SERVICE].value

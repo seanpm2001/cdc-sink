@@ -140,11 +140,11 @@ spec:
           imagePullPolicy: Always
           resources:
             requests:
-              cpu: "2"
-              memory: "8Gi"
+              cpu: "4"
+              memory: "16Gi"
             limits:
-              cpu: "2"
-              memory: "8Gi"
+              cpu: "4"
+              memory: "16Gi"
           ports:
             - containerPort: 26257
               name: grpc
