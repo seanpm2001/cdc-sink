@@ -52,15 +52,22 @@ spec:
             - "until nc -z $(COCKROACH_SERVICE) 26257; do echo Waiting for Cockroach; sleep 10; done"
       containers:
         - name: cdc-sink
-          image: cockroachdb/cdc-sink:master
+          image: us-central1-docker.pkg.dev/cockroach-bob/cdc-sink/cdc-sink:latest
           imagePullPolicy: Always
           env:
             - name: COCKROACH_SERVICE
               value: "Injected by kustomization"
             - name: CONN_STRING
-              value: "postgresql://root@$(COCKROACH_SERVICE):26257/?sslmode=disable"
+              value: "postgresql://root@$(COCKROACH_SERVICE):26257/?sslmode=disable&pool_max_conns=2000"
+            - name: GOMAXPROCS
+              valueFrom:
+                resourceFieldRef:
+                  resource: limits.cpu
+                  divisor: "1"
           args:
             - "start"
+            - "-v"
+            - "-v"
             - "--bindAddr"
             - ":443"
             - "--conn"
@@ -75,11 +82,12 @@ spec:
           resources:
             limits:
               memory: "2Gi"
-              cpu: "2"
+              cpu: "4"
             requests:
               memory: "2Gi"
-              cpu: "2"
+              cpu: "4"
           readinessProbe:
+            periodSeconds: 1
             httpGet:
               port: https
               path: "/_/healthz"

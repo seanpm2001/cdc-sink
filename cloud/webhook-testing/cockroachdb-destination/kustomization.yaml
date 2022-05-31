@@ -6,9 +6,9 @@ commonLabels:
   side: destination
 replicas:
   - name: cockroachdb
-    count: 6
+    count: 16
   - name: cdc-sink
-    count: 2
+    count: 6
 # Patch an environment variable that feeds the --join flag.
 replacements:
   - source:

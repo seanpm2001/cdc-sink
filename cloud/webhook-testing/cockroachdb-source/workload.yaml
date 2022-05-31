@@ -46,10 +46,11 @@ spec:
             - exec
               /cockroach/cockroach
               workload run tpcc
-              --max-rate 150
+              --max-rate 50
               --warehouses 1000
               --ramp 1m
               --tolerate-errors
+              --wait false
               $(CONNECT_STRING)
           env:
             - name: COCKROACH_SERVICE
