@@ -151,9 +151,11 @@ type TimeKeeper interface {
 
 // ColData hold SQL column metadata.
 type ColData struct {
-	Ignored bool
-	Name    ident.Ident
-	Primary bool
+	// HasDefault is true if there is a DEFAULT expression.
+	HasDefault bool
+	Ignored    bool
+	Name       ident.Ident
+	Primary    bool
 	// Type of the column. Dialect might choose to use a string representation or a enum.
 	Type interface{}
 }

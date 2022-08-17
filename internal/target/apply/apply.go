@@ -46,7 +46,7 @@ type apply struct {
 		sync.RWMutex
 		configData *Config
 		schemaData []types.ColData
-		pks        []types.ColData
+		keys       []types.ColData
 		templates  *templates
 	}
 }
@@ -198,25 +198,25 @@ func (a *apply) deleteLocked(ctx context.Context, db pgxtype.Querier, muts []typ
 		return err
 	}
 
-	allArgs := make([]interface{}, 0, len(a.mu.pks)*len(muts))
+	allArgs := make([]interface{}, 0, len(a.mu.keys)*len(muts))
 
 	for i := range muts {
 		dec := json.NewDecoder(bytes.NewReader(muts[i].Key))
 		dec.UseNumber()
 
-		args := make([]interface{}, 0, len(a.mu.pks))
+		args := make([]interface{}, 0, len(a.mu.keys))
 		if err := dec.Decode(&args); err != nil {
 			return errors.WithStack(err)
 		}
 
-		if len(args) != len(a.mu.pks) {
+		if len(args) != len(a.mu.keys) {
 			return errors.Errorf(
 				"schema drift detected in %s: "+
 					"inconsistent number of key columns: "+
 					"received %d expect %d: "+
 					"key %s@%s",
 				a.target,
-				len(args), len(a.mu.pks),
+				len(args), len(a.mu.keys),
 				string(muts[i].Key), muts[i].Time)
 		}
 		allArgs = append(allArgs, args...)
@@ -287,13 +287,8 @@ func (a *apply) upsertLocked(ctx context.Context, db pgxtype.Querier, muts []typ
 			if presentInPayload {
 				knownColumnsInPayload[sourceCol] = struct{}{}
 			}
-			// Ignored will be true for columns in the target database
-			// that we know about, but that we don't actually want to
-			// insert new values for (e.g. computed columns). These
-			// ignored columns could be part of the primary key, or they
-			// could be a regular column. We also allow the user to
-			// force columns to be ignored (e.g. to drop a column).
-			if col.Ignored || a.mu.configData.Ignore[col.Name] {
+			// See comments in method for reasons columns are ignored.
+			if a.shouldIgnoreLocked(col) {
 				continue
 			}
 			// We allow the user to specify an arbitrary expression for
@@ -397,6 +392,22 @@ func (a *apply) refreshUnlocked(configData *Config, schemaData []types.ColData) 
 	for _, col := range schemaData {
 		allColNames[col.Name] = struct{}{}
 	}
+	for _, col := range configData.AltKeys {
+		if _, found := allColNames[col]; !found {
+			return errors.Errorf("alt-key column name %s not found in table %s", col, a.target)
+		}
+	}
+	// If we're using alternate keying for a target table, we want to
+	// ensure that the PK columns in the target table definition have
+	// a DEFAULT value, so that we can pretend they don't exist.
+	if len(configData.AltKeys) > 0 {
+		for _, col := range schemaData {
+			if col.Primary && !col.HasDefault {
+				return errors.Errorf(
+					"using alt-keys and primary key column %s does not have a DEFAULT", col.Name)
+			}
+		}
+	}
 	for _, col := range configData.CASColumns {
 		if _, found := allColNames[col]; !found {
 			return errors.Errorf("cas column name %s not found in table %s", col, a.target)
@@ -428,8 +439,30 @@ func (a *apply) refreshUnlocked(configData *Config, schemaData []types.ColData) 
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.mu.configData = configData
+	a.mu.keys = tmpls.Keys
 	a.mu.schemaData = schemaData
-	a.mu.pks = tmpls.PK
 	a.mu.templates = tmpls
 	return nil
+}
+
+// shouldIgnoreLocked will return true for columns in the target table
+// that we know about, but that we don't actually want to insert new
+// values for.
+func (a *apply) shouldIgnoreLocked(col types.ColData) bool {
+	// The column has a generation expression (i.e. is a STORED column).
+	if col.Ignored {
+		return true
+	}
+	// User configuration, to be able to drop columns from the
+	// incoming feed.
+	if a.mu.configData.Ignore[col.Name] {
+		return true
+	}
+	// If an alternate key structure is in use, we ignore the table's
+	// primary keys in favor of the configured keys. There is a check
+	// in refreshUnlocked to verify that PKs have a DEFAULT expression.
+	if len(a.mu.configData.AltKeys) > 0 && col.Primary {
+		return true
+	}
+	return false
 }

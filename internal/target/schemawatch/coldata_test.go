@@ -153,6 +153,20 @@ func TestGetColumns(t *testing.T) {
 				}
 			},
 		},
+		// Check that we detect columns with default expressions.
+		{
+			"a UUID PRIMARY KEY DEFAULT gen_random_uuid(), b INT DEFAULT 0, c INT",
+			[]string{"a"},
+			[]string{"b", "c"},
+			func(t *testing.T, data []types.ColData) {
+				a := assert.New(t)
+				if a.Len(data, 3) {
+					a.True(data[0].HasDefault)
+					a.True(data[1].HasDefault)
+					a.False(data[2].HasDefault)
+				}
+			},
+		},
 	}
 
 	// Virtual columns not supported before v21.1.

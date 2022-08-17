@@ -54,6 +54,10 @@ func TestPersistenceRoundTrip(t *testing.T) {
 	a.True(readWatch().IsZero())
 
 	cfg := &apply.Config{
+		AltKeys: []ident.Ident{
+			ident.New("alt1"),
+			ident.New("alt2"),
+		},
 		CASColumns: []ident.Ident{
 			ident.New("cas1"),
 			ident.New("cas2"),

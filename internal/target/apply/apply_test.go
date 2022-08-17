@@ -552,6 +552,56 @@ func testConditions(t *testing.T, cas, deadline bool) {
 	}
 }
 
+// Verify behavior when using an alternate key.
+func TestAlternateKeys(t *testing.T) {
+	a := assert.New(t)
+
+	fixture, cancel, err := sinktest.NewFixture()
+	if !a.NoError(err) {
+		return
+	}
+	defer cancel()
+
+	ctx := fixture.Context
+
+	type Payload struct {
+		PK  int    `json:"old_key"`
+		Val string `json:"val"`
+	}
+
+	// Create a table that shows how we might go about rekeying data
+	// on the fly. We show the case where the source key is an int,
+	// but we want to use a uuid instead.
+	tbl, err := fixture.CreateTable(ctx,
+		`CREATE TABLE %s (
+pk UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+old_key INT NOT NULL UNIQUE, 
+val STRING)`)
+	if !a.NoError(err) {
+		return
+	}
+
+	configData := apply.NewConfig()
+	configData.AltKeys = []ident.Ident{ident.New("old_key")}
+	a.NoError(fixture.Configs.Store(ctx, fixture.Pool, tbl.Name(), configData))
+	changed, err := fixture.Configs.Refresh(ctx)
+	a.True(changed)
+	a.NoError(err)
+	app, err := fixture.Appliers.Get(ctx, tbl.Name())
+	if !a.NoError(err) {
+		return
+	}
+
+	p := Payload{PK: 42, Val: "Hello world!"}
+	bytes, err := json.Marshal(p)
+	a.NoError(err)
+
+	a.NoError(app.Apply(ctx, fixture.Pool, []types.Mutation{{
+		Data: bytes,
+		Key:  []byte(fmt.Sprintf(`[%d]`, p.PK)),
+	}}))
+}
+
 // Verifies "constant" and substitution params, including cases where
 // the PK is subject to rewriting.
 func TestExpressionColumns(t *testing.T) {

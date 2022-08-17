@@ -22,14 +22,16 @@ import (
 func TestQueryTemplates(t *testing.T) {
 	cols := []types.ColData{
 		{
-			Name:    ident.New("pk0"),
-			Primary: true,
-			Type:    "STRING",
+			Name:       ident.New("pk0"),
+			HasDefault: true,
+			Primary:    true,
+			Type:       "STRING",
 		},
 		{
-			Name:    ident.New("pk1"),
-			Primary: true,
-			Type:    "INT8",
+			Name:       ident.New("pk1"),
+			HasDefault: true,
+			Primary:    true,
+			Type:       "INT8",
 		},
 		{
 			Name: ident.New("val0"),
@@ -85,11 +87,62 @@ func TestQueryTemplates(t *testing.T) {
 	}{
 		{
 			name: "base",
-			upsert: `UPSERT INTO "database"."schema"."table" (
-"pk0","pk1","val0","val1","geom","geog","enum"
-) VALUES
+			upsert: `WITH data("pk0","pk1","val0","val1","geom","geog","enum") AS (
+VALUES
 ($1::STRING,$2::INT8,$3::STRING,$4::STRING,st_geomfromgeojson($5::JSONB),st_geogfromgeojson($6::JSONB),$7::"database"."schema"."MyEnum"),
-($8::STRING,$9::INT8,$10::STRING,$11::STRING,st_geomfromgeojson($12::JSONB),st_geogfromgeojson($13::JSONB),$14::"database"."schema"."MyEnum")`,
+($8::STRING,$9::INT8,$10::STRING,$11::STRING,st_geomfromgeojson($12::JSONB),st_geogfromgeojson($13::JSONB),$14::"database"."schema"."MyEnum"))
+UPSERT INTO "database"."schema"."table" ("pk0","pk1","val0","val1","geom","geog","enum")
+SELECT * FROM data`,
+		},
+		{
+			name: "altKeys",
+			cfg: &Config{
+				AltKeys: []ident.Ident{ident.New("val1"), ident.New("val0")},
+			},
+			upsert: `WITH data("val0","val1","geom","geog","enum") AS (
+VALUES
+($1::STRING,$2::STRING,st_geomfromgeojson($3::JSONB),st_geogfromgeojson($4::JSONB),$5::"database"."schema"."MyEnum"),
+($6::STRING,$7::STRING,st_geomfromgeojson($8::JSONB),st_geogfromgeojson($9::JSONB),$10::"database"."schema"."MyEnum"))
+INSERT INTO "database"."schema"."table" ("val0","val1","geom","geog","enum")
+SELECT * FROM data
+ON CONFLICT ("val0","val1")
+DO UPDATE SET
+"geom"=excluded."geom",
+"geog"=excluded."geog",
+"enum"=excluded."enum"`,
+			delete: `DELETE FROM "database"."schema"."table" WHERE ("val0","val1")IN(($1::STRING,$2::STRING),
+($3::STRING,$4::STRING))`,
+		},
+		{
+			name: "altCas",
+			cfg: &Config{
+				AltKeys:    []ident.Ident{ident.New("val1"), ident.New("val0")},
+				CASColumns: []ident.Ident{ident.New("val1"), ident.New("val0")},
+			},
+			upsert: `WITH data("val0","val1","geom","geog","enum") AS (
+VALUES
+($1::STRING,$2::STRING,st_geomfromgeojson($3::JSONB),st_geogfromgeojson($4::JSONB),$5::"database"."schema"."MyEnum"),
+($6::STRING,$7::STRING,st_geomfromgeojson($8::JSONB),st_geogfromgeojson($9::JSONB),$10::"database"."schema"."MyEnum")),
+current AS (
+SELECT "val0","val1", "table"."val1","table"."val0"
+FROM "database"."schema"."table"
+JOIN data
+USING ("val0","val1")),
+action AS (
+SELECT data.* FROM data
+LEFT JOIN current
+USING ("val0","val1")
+WHERE current."val0" IS NULL OR
+("data"."val1","data"."val0") > ("current"."val1","current"."val0"))
+INSERT INTO "database"."schema"."table" ("val0","val1","geom","geog","enum")
+SELECT * FROM action
+ON CONFLICT ("val0","val1")
+DO UPDATE SET
+"geom"=excluded."geom",
+"geog"=excluded."geog",
+"enum"=excluded."enum"`,
+			delete: `DELETE FROM "database"."schema"."table" WHERE ("val0","val1")IN(($1::STRING,$2::STRING),
+($3::STRING,$4::STRING))`,
 		},
 		{
 			name: "cas",
@@ -166,11 +219,12 @@ SELECT * FROM action`,
 					ident.New("geog"): true,
 				},
 			},
-			upsert: `UPSERT INTO "database"."schema"."table" (
-"pk0","pk1","val0","val1","enum"
-) VALUES
+			upsert: `WITH data("pk0","pk1","val0","val1","enum") AS (
+VALUES
 ($1::STRING,$2::INT8,$3::STRING,$4::STRING,$5::"database"."schema"."MyEnum"),
-($6::STRING,$7::INT8,$8::STRING,$9::STRING,$10::"database"."schema"."MyEnum")`,
+($6::STRING,$7::INT8,$8::STRING,$9::STRING,$10::"database"."schema"."MyEnum"))
+UPSERT INTO "database"."schema"."table" ("pk0","pk1","val0","val1","enum")
+SELECT * FROM data`,
 		},
 		{
 			// Changing the source names should have no effect on the
@@ -184,11 +238,12 @@ SELECT * FROM action`,
 					ident.New("unknown"): ident.New("is ok"),
 				},
 			},
-			upsert: `UPSERT INTO "database"."schema"."table" (
-"pk0","pk1","val0","val1","geom","geog","enum"
-) VALUES
+			upsert: `WITH data("pk0","pk1","val0","val1","geom","geog","enum") AS (
+VALUES
 ($1::STRING,$2::INT8,$3::STRING,$4::STRING,st_geomfromgeojson($5::JSONB),st_geogfromgeojson($6::JSONB),$7::"database"."schema"."MyEnum"),
-($8::STRING,$9::INT8,$10::STRING,$11::STRING,st_geomfromgeojson($12::JSONB),st_geogfromgeojson($13::JSONB),$14::"database"."schema"."MyEnum")`,
+($8::STRING,$9::INT8,$10::STRING,$11::STRING,st_geomfromgeojson($12::JSONB),st_geogfromgeojson($13::JSONB),$14::"database"."schema"."MyEnum"))
+UPSERT INTO "database"."schema"."table" ("pk0","pk1","val0","val1","geom","geog","enum")
+SELECT * FROM data`,
 		},
 		{
 			// Verify user-configured expressions, with zero, one, and
@@ -207,11 +262,12 @@ SELECT * FROM action`,
 			},
 			delete: `DELETE FROM "database"."schema"."table" WHERE ("pk0","pk1")IN(($1::STRING,($2+$2)::INT8),
 ($3::STRING,($4+$4)::INT8))`,
-			upsert: `UPSERT INTO "database"."schema"."table" (
-"pk0","pk1","val0","val1","enum"
-) VALUES
+			upsert: `WITH data("pk0","pk1","val0","val1","enum") AS (
+VALUES
 ($1::STRING,($2+$2)::INT8,('fixed')::STRING,($3||'foobar')::STRING,$4::"database"."schema"."MyEnum"),
-($5::STRING,($6+$6)::INT8,('fixed')::STRING,($7||'foobar')::STRING,$8::"database"."schema"."MyEnum")`,
+($5::STRING,($6+$6)::INT8,('fixed')::STRING,($7||'foobar')::STRING,$8::"database"."schema"."MyEnum"))
+UPSERT INTO "database"."schema"."table" ("pk0","pk1","val0","val1","enum")
+SELECT * FROM data`,
 		},
 	}
 

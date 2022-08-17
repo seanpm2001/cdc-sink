@@ -40,6 +40,7 @@ type (
 
 // A Config contains per-target-table configuration.
 type Config struct {
+	AltKeys     []TargetColumn                 // Columns in a UNIQUE index to use instead of PKs.
 	CASColumns  []TargetColumn                 // The columns for compare-and-set operations.
 	Deadlines   map[TargetColumn]time.Duration // Deadline-based operation.
 	Exprs       map[TargetColumn]string        // Synthetic or replacement SQL expressions.
@@ -65,6 +66,7 @@ func NewConfig() *Config {
 func (t *Config) Copy() *Config {
 	ret := NewConfig()
 
+	ret.AltKeys = append(ret.AltKeys, t.AltKeys...)
 	ret.CASColumns = append(ret.CASColumns, t.CASColumns...)
 	for k, v := range t.Deadlines {
 		ret.Deadlines[k] = v
@@ -86,7 +88,8 @@ func (t *Config) Copy() *Config {
 // IsZero returns true if the Config represents the absence of a
 // configuration.
 func (t *Config) IsZero() bool {
-	return len(t.CASColumns) == 0 &&
+	return len(t.AltKeys) == 0 &&
+		len(t.CASColumns) == 0 &&
 		len(t.Deadlines) == 0 &&
 		len(t.Exprs) == 0 &&
 		t.Extras.IsEmpty() &&
@@ -149,6 +152,7 @@ CREATE TABLE IF NOT EXISTS %[1]s (
   target_table  STRING CHECK ( length(target_table) > 0 ),
   target_column STRING CHECK ( length(target_column) > 0 ),
 
+  alt_order INT        NOT NULL DEFAULT 0 CHECK ( alt_order >= 0 ),
   cas_order INT        NOT NULL DEFAULT 0 CHECK ( cas_order >= 0 ),
   deadline  INTERVAL   NOT NULL DEFAULT 0::INTERVAL,
   expr      STRING     NOT NULL DEFAULT '',
@@ -163,13 +167,13 @@ CREATE TABLE IF NOT EXISTS %[1]s (
 DELETE FROM %[1]s WHERE target_db = $1 AND target_schema = $2 AND target_table = $3`
 	loadConfTemplate = `
 SELECT target_db, target_schema, target_table, target_column,
-       cas_order, deadline, expr, extras, ignore, src_name
+       alt_order, cas_order, deadline, expr, extras, ignore, src_name
 FROM %[1]s`
 	upsertConfTemplate = `
 UPSERT INTO %[1]s (target_db, target_schema, target_table, target_column,
-  cas_order, deadline, expr, extras, ignore, src_name)
+  alt_order, cas_order, deadline, expr, extras, ignore, src_name)
 VALUES (
-  $1, $2, $3, $4, $5, $6, $7, $8, $9, $10
+  $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
 )`
 )
 
@@ -186,13 +190,14 @@ func (c *Configs) Refresh(ctx context.Context) (changed bool, _ error) {
 	// Accumulate CAS data in a sparse map and then validate it.
 	type tempConfig struct {
 		*Config
+		altMap map[int]SourceColumn
 		casMap map[int]SourceColumn
 	}
 	nextConfigs := make(map[ident.Table]*tempConfig)
 
 	for rows.Next() {
 		var targetDB, targetSchema, targetTable, targetColumn string
-		var cas int // 1-based index; 0 == regular column
+		var alt, cas int // 1-based index; 0 == regular column
 		var deadline time.Duration
 		var expr string
 		var extras bool
@@ -201,7 +206,7 @@ func (c *Configs) Refresh(ctx context.Context) (changed bool, _ error) {
 
 		err := rows.Scan(
 			&targetDB, &targetSchema, &targetTable, &targetColumn,
-			&cas, &deadline, &expr, &extras, &ignore, &rename)
+			&alt, &cas, &deadline, &expr, &extras, &ignore, &rename)
 		if err != nil {
 			return false, errors.WithStack(err)
 		}
@@ -212,10 +217,18 @@ func (c *Configs) Refresh(ctx context.Context) (changed bool, _ error) {
 
 		tableData, found := nextConfigs[targetTableIdent]
 		if !found {
-			tableData = &tempConfig{NewConfig(), make(map[int]SourceColumn)}
+			tableData = &tempConfig{
+				NewConfig(),
+				make(map[int]SourceColumn),
+				make(map[int]SourceColumn),
+			}
 			nextConfigs[targetTableIdent] = tableData
 		}
 
+		if alt != 0 {
+			// Convert to zero-based.
+			tableData.altMap[alt-1] = targetColIdent
+		}
 		if cas != 0 {
 			// Convert to zero-based.
 			tableData.casMap[cas-1] = targetColIdent
@@ -245,6 +258,15 @@ func (c *Configs) Refresh(ctx context.Context) (changed bool, _ error) {
 
 	finalized := make(map[ident.Table]*Config, len(nextConfigs))
 	for table, data := range nextConfigs {
+		// Ensure that the alt-key mappings are sane and create the slice.
+		data.AltKeys = make([]SourceColumn, len(data.altMap))
+		for idx := range data.AltKeys {
+			colName, found := data.altMap[idx]
+			if !found {
+				return false, errors.Errorf("%s: gap in alt-key columns at index %d", table, idx)
+			}
+			data.AltKeys[idx] = colName
+		}
 		// Ensure that the CAS mappings are sane and create the slice.
 		data.CASColumns = make([]SourceColumn, len(data.casMap))
 		for idx := range data.CASColumns {
@@ -320,8 +342,13 @@ func (c *Configs) Store(
 	}
 
 	// Collect all referenced source columns.
+	altIdx := make(map[SourceColumn]int)
 	casIdx := make(map[SourceColumn]int)
 	refs := make(map[SourceColumn]struct{})
+	for idx, col := range cfg.AltKeys {
+		refs[col] = struct{}{}
+		altIdx[col] = idx + 1 // Store one-based values.
+	}
 	for idx, col := range cfg.CASColumns {
 		refs[col] = struct{}{}
 		casIdx[col] = idx + 1 // Store one-based values.
@@ -359,6 +386,7 @@ func (c *Configs) Store(
 			table.Schema().Raw(),
 			table.Table().Raw(),
 			col.Raw(),
+			altIdx[col],
 			casIdx[col],
 			cfg.Deadlines[col],
 			cfg.Exprs[col],

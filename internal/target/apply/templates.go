@@ -63,9 +63,8 @@ var (
 			return ret, nil
 		},
 	}).ParseFS(queries, "**/*.tmpl"))
-	conditionalTemplate = parsed.Lookup("conditional.tmpl")
-	deleteTemplate      = parsed.Lookup("delete.tmpl")
-	upsertTemplate      = parsed.Lookup("upsert.tmpl")
+	deleteTemplate = parsed.Lookup("delete.tmpl")
+	upsertTemplate = parsed.Lookup("upsert.tmpl")
 )
 
 // A templateCache stores variations of the delete and upsert commands
@@ -78,12 +77,14 @@ type templateCache struct {
 }
 
 type templates struct {
-	Columns    []types.ColData        // All non-ignored columns.
+	Columns    []types.ColData        // All non-ignored columns; Keys + Columns
 	Conditions []types.ColData        // The version-like fields for CAS ops.
 	Deadlines  types.Deadlines        // Allow too-old data to just be dropped.
 	Exprs      map[ident.Ident]string // Value-replacement expressions.
-	PK         []types.ColData        // All primary-key columns.
+	Keys       []types.ColData        // Primary-key or UNIQUE-index columns acting as a key.
+	NonKeys    []types.ColData        // Columns not part of the keys.
 	TableName  ident.Table            // The target table.
+	UseUpsert  bool                   // Toggle between UPSERT and IOCDU.
 	cache      *templateCache         // Memoize calls to delete() and upsert().
 
 	// The variables below here are updated during evaluation.
@@ -95,6 +96,11 @@ type templates struct {
 // pre-computations to identify primary keys and to filter out ignored
 // columns.
 func newTemplates(target ident.Table, cfgData *Config, colData []types.ColData) *templates {
+	altMap := make(map[ident.Ident]int, len(cfgData.AltKeys))
+	for idx, name := range cfgData.AltKeys {
+		altMap[name] = idx
+	}
+	useAltKeys := len(cfgData.AltKeys) > 0
 	// Map cas column names to their order in the comparison tuple.
 	casMap := make(map[ident.Ident]int, len(cfgData.CASColumns))
 	for idx, name := range cfgData.CASColumns {
@@ -107,30 +113,50 @@ func newTemplates(target ident.Table, cfgData *Config, colData []types.ColData) 
 		Deadlines:  cfgData.Deadlines,
 		Exprs:      cfgData.Exprs,
 		TableName:  target,
+		UseUpsert:  len(cfgData.AltKeys) == 0,
 		cache: &templateCache{
 			deletes: lru.New(batches.Size() / 10),
 			upserts: lru.New(batches.Size() / 10),
 		},
 	}
 
-	// Filter out the ignored columns, build the list of PK columns,
-	// and apply renames.
-	// https://github.com/golang/go/wiki/SliceTricks#filter-in-place
-	idx := 0
+	// Build the list of key and data columns.
 	for _, col := range ret.Columns {
 		if col.Ignored || cfgData.Ignore[col.Name] {
 			continue
 		}
-		ret.Columns[idx] = col
-		idx++
-		if col.Primary {
-			ret.PK = append(ret.PK, col)
+
+		// Determine if the column is used as a key. This will either be
+		// part of the primary key of the target table, or columns from
+		// another UNIQUE index.
+		var treatAsKey bool
+		if useAltKeys {
+			if _, isAltKey := altMap[col.Name]; isAltKey {
+				treatAsKey = true
+			} else if col.Primary {
+				// We ignore the table's primary keys. We have required
+				// elsewhere that when alt-keys are used, all PK columns
+				// must have a DEFAULT value.
+				continue
+			}
+		} else {
+			treatAsKey = col.Primary
+		}
+
+		if treatAsKey {
+			ret.Keys = append(ret.Keys, col)
+		} else {
+			ret.NonKeys = append(ret.NonKeys, col)
 		}
 		if idx, isCas := casMap[col.Name]; isCas {
 			ret.Conditions[idx] = col
 		}
 	}
-	ret.Columns = ret.Columns[:idx]
+
+	ret.Columns = make([]types.ColData, len(ret.Keys)+len(ret.NonKeys))
+	copy(ret.Columns, ret.Keys)
+	copy(ret.Columns[len(ret.Keys):], ret.NonKeys)
+
 	return ret
 }
 
@@ -190,7 +216,7 @@ func (t *templates) delete(rowCount int) (string, error) {
 
 	// Make a copy that we can tweak.
 	cpy := *t
-	cpy.Columns = t.PK
+	cpy.Columns = t.Keys // XXX need alt keys
 	cpy.RowCount = rowCount
 
 	var buf strings.Builder
@@ -216,12 +242,7 @@ func (t *templates) upsert(rowCount int) (string, error) {
 	cpy.RowCount = rowCount
 
 	var buf strings.Builder
-	var err error
-	if len(cpy.Conditions) == 0 && len(cpy.Deadlines) == 0 {
-		err = upsertTemplate.Execute(&buf, &cpy)
-	} else {
-		err = conditionalTemplate.Execute(&buf, &cpy)
-	}
+	err := upsertTemplate.Execute(&buf, &cpy)
 	ret, err := buf.String(), errors.WithStack(err)
 	if err == nil {
 		t.cache.upserts.Add(rowCount, ret)

@@ -57,13 +57,22 @@ pks AS (
 	JOIN pk_name ON (index_name = constraint_name)
 	WHERE NOT storing),
 cols AS (
-	SELECT column_name, data_type, generation_expression != '' AS ignored
+	SELECT
+      column_name,
+      data_type,
+      generation_expression != '' AS ignored,
+      column_default IS NOT NULL AS has_default
 	FROM [SHOW COLUMNS FROM %[1]s]),
 ordered AS (
 	SELECT column_name, min(ifnull(pks.seq_in_index, 2048)) AS seq_in_index FROM
 	cols LEFT JOIN pks USING (column_name)
     GROUP BY column_name)
-SELECT cols.column_name, pks.seq_in_index IS NOT NULL, cols.data_type, cols.ignored
+SELECT 
+  cols.column_name,
+  pks.seq_in_index IS NOT NULL,
+  cols.data_type,
+  cols.ignored,
+  cols.has_default
 FROM cols
 JOIN ordered USING (column_name)
 LEFT JOIN pks USING (column_name)
@@ -92,7 +101,7 @@ func getColumns(
 		for rows.Next() {
 			var column types.ColData
 			var rawColType, name string
-			if err := rows.Scan(&name, &column.Primary, &rawColType, &column.Ignored); err != nil {
+			if err := rows.Scan(&name, &column.Primary, &rawColType, &column.Ignored, &column.HasDefault); err != nil {
 				return err
 			}
 			column.Name = ident.New(name)
