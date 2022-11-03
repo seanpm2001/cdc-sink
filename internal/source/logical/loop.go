@@ -69,6 +69,9 @@ func (l *Loop) Stopped() <-chan struct{} {
 // loop is not internally synchronized; it assumes that it is being
 // driven by a serial stream of data.
 type loop struct {
+	// asyncErrors provides a mechanism for out-of-band error
+	// propagation. Call setError.
+	asyncErrors chan error
 	// The active configuration.
 	config *BaseConfig
 	// The Dialect contains message-processing, specific to a particular
@@ -149,6 +152,17 @@ func (l *loop) setConsistentPoint(p stamp.Stamp) error {
 	l.standbyDeadline = time.Now().Add(l.config.StandbyTimeout)
 	log.Tracef("Saved checkpoint for %s", l.config.LoopName)
 	return nil
+}
+
+// setError can be called out-of-band to inject an error into the
+// current processing loop iteration.
+func (l *loop) setError(err error) {
+	log.WithError(err).Tracef("loop %s setError", l.config.LoopName)
+	select {
+	case l.asyncErrors <- err:
+	default:
+		panic(err)
+	}
 }
 
 // storeConsistentPoint commits the given stamp to the memo table.
@@ -258,6 +272,26 @@ func (l *loop) runOnce(
 	groupCtx, cancelGroup := context.WithCancel(ctx)
 	defer cancelGroup()
 	group, groupCtx := errgroup.WithContext(groupCtx)
+
+	// Drain any errors from previous loops, then start a goroutine
+	// which monitors the error channel.
+drainError:
+	for {
+		select {
+		case err := <-l.asyncErrors:
+			log.WithError(err).Warn("XXX stale")
+		default:
+			break drainError
+		}
+	}
+	group.Go(func() error {
+		select {
+		case err := <-l.asyncErrors:
+			return errors.Wrap(err, "async error")
+		case <-groupCtx.Done():
+			return nil
+		}
+	})
 
 	// Start a background goroutine to maintain the replication
 	// connection. This source goroutine is set up to be robust; if

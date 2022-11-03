@@ -257,6 +257,7 @@ func testMassBackfillWithForeignKeys(t *testing.T, backfill bool, chaosProb floa
 			FanShards:          16,
 			ForeignKeysEnabled: true,
 			LoopName:           "changefeed",
+			ShingleDepth:       10,
 			StagingDB:          baseFixture.StagingDB.Ident(),
 			RetryDelay:         time.Nanosecond,
 			TargetConn:         baseFixture.Pool.Config().ConnString(),

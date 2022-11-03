@@ -47,6 +47,15 @@ func (e *serialEvents) Backfill(
 	return e.loop.doBackfill(ctx, source, backfiller, options...)
 }
 
+// Clone returns a new serialEvents that is ready for a transaction cycle.
+func (e *serialEvents) Clone() *serialEvents {
+	return &serialEvents{
+		appliers: e.appliers,
+		loop:     e.loop,
+		pool:     e.pool,
+	}
+}
+
 // GetConsistentPoint implements State. It delegates to the loop.
 func (e *serialEvents) GetConsistentPoint() stamp.Stamp { return e.loop.GetConsistentPoint() }
 

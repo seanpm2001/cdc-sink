@@ -23,6 +23,7 @@ import (
 const (
 	defaultApplyTimeout   = 30 * time.Second
 	defaultRetryDelay     = 10 * time.Second
+	defaultShingleDepth   = 10
 	defaultStandbyTimeout = 5 * time.Second
 	defaultTargetDBConns  = 1024
 	defaultBytesInFlight  = 10 * 1024 * 1024
@@ -73,6 +74,9 @@ type BaseConfig struct {
 	RetryDelay time.Duration
 	// Userscript configuration.
 	ScriptConfig script.Config
+	// The number of overlapping transactions that may be used to upsert
+	// data into destination rows.
+	ShingleDepth int
 	// How often to commit the latest consistent point.
 	StandbyTimeout time.Duration
 	// The name of a SQL database in the target cluster to store
@@ -112,6 +116,8 @@ func (c *BaseConfig) Bind(f *pflag.FlagSet) {
 		"re-order updates to satisfy foreign key constraints")
 	f.DurationVar(&c.RetryDelay, "retryDelay", defaultRetryDelay,
 		"the amount of time to sleep between replication retries")
+	f.IntVar(&c.ShingleDepth, "shingleDepth", defaultShingleDepth,
+		"the number of concurrently-pending transactions to upsert data with")
 	f.Var(ident.NewValue("_cdc_sink", &c.StagingDB), "stagingDB",
 		"a SQL database to store metadata in")
 	f.DurationVar(&c.StandbyTimeout, "standbyTimeout", defaultStandbyTimeout,
@@ -154,6 +160,9 @@ func (c *BaseConfig) Preflight() error {
 	}
 	if c.RetryDelay == 0 {
 		c.RetryDelay = defaultRetryDelay
+	}
+	if c.ShingleDepth == 0 {
+		c.ShingleDepth = defaultShingleDepth
 	}
 	if c.StagingDB.IsEmpty() {
 		return errors.New("no staging database specified")

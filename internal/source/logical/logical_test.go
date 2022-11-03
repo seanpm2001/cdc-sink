@@ -12,6 +12,8 @@ package logical_test
 
 import (
 	"fmt"
+	"sort"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"testing/fstest"
@@ -27,16 +29,62 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestLogical(t *testing.T) {
-	t.Run("consistent", func(t *testing.T) { testLogicalSmoke(t, false, false, false) })
-	t.Run("consistent-backfill", func(t *testing.T) { testLogicalSmoke(t, true, false, false) })
-	t.Run("consistent-chaos", func(t *testing.T) { testLogicalSmoke(t, false, false, true) })
-	t.Run("consistent-chaos-backfill", func(t *testing.T) { testLogicalSmoke(t, true, false, true) })
-	t.Run("immediate", func(t *testing.T) { testLogicalSmoke(t, false, true, false) })
-	t.Run("immediate-chaos", func(t *testing.T) { testLogicalSmoke(t, false, true, true) })
+type logicalTestCfg struct {
+	allowBackfill bool
+	immediate     bool
+	withChaos     bool
+	withShingle   bool
 }
 
-func testLogicalSmoke(t *testing.T, allowBackfill, immediate, withChaos bool) {
+func (c *logicalTestCfg) String() string {
+	var parts []string
+	if c.immediate {
+		parts = append(parts, "immediate")
+	} else {
+		parts = append(parts, "consistent")
+	}
+	if c.allowBackfill {
+		parts = append(parts, "backfill")
+	}
+	if c.withShingle {
+		parts = append(parts, "shingle")
+	}
+	if c.withChaos {
+		parts = append(parts, "chaos")
+	}
+	return strings.Join(parts, "-")
+}
+
+func TestLogical(t *testing.T) {
+	bools := []bool{true, false}
+
+	var tcs []*logicalTestCfg
+	for _, imm := range bools {
+		for _, backfill := range bools {
+			for _, shingle := range bools {
+				for _, chaos := range bools {
+					tcs = append(tcs, &logicalTestCfg{
+						immediate:     imm,
+						allowBackfill: backfill,
+						withShingle:   shingle,
+						withChaos:     chaos,
+					})
+				}
+			}
+		}
+	}
+	sort.Slice(tcs, func(i, j int) bool {
+		return strings.Compare(tcs[i].String(), tcs[j].String()) < 0
+	})
+
+	for _, tc := range tcs {
+		t.Run(tc.String(), func(t *testing.T) {
+			testLogicalSmoke(t, tc)
+		})
+	}
+}
+
+func testLogicalSmoke(t *testing.T, tc *logicalTestCfg) {
 	a := assert.New(t)
 
 	// Create a basic test fixture.
@@ -70,22 +118,27 @@ func testLogicalSmoke(t *testing.T, allowBackfill, immediate, withChaos bool) {
 	gen.emit(numEmits)
 
 	var dialect logical.Dialect = gen
-	if withChaos {
+	if tc.withChaos {
 		dialect = logical.WithChaos(gen, 0.01)
 	}
 
 	cfg := &logical.BaseConfig{
 		ApplyTimeout:   2 * time.Minute, // Increase to make using the debugger easier.
 		LoopName:       "generator",
-		Immediate:      immediate,
+		Immediate:      tc.immediate,
 		RetryDelay:     time.Nanosecond,
 		StagingDB:      fixture.StagingDB.Ident(),
 		StandbyTimeout: 5 * time.Millisecond,
 		TargetConn:     pool.Config().ConnString(),
 		TargetDB:       dbName,
 	}
-	if allowBackfill {
+	if tc.allowBackfill {
 		cfg.BackfillWindow = time.Minute
+	}
+	if tc.withShingle {
+		cfg.ShingleDepth = 10
+	} else {
+		cfg.ShingleDepth = -1
 	}
 
 	loop, cancelLoop, err := logical.Start(ctx, cfg, dialect)
@@ -112,7 +165,7 @@ func testLogicalSmoke(t *testing.T, allowBackfill, immediate, withChaos bool) {
 			if err := pool.QueryRow(ctx, fmt.Sprintf("SELECT count(*) FROM %s", tgt)).Scan(&count); !a.NoError(err) {
 				return
 			}
-			log.Tracef("backfill count %d", count)
+			log.Infof("backfill count %d", count)
 			if count == numEmits {
 				break
 			}
@@ -128,7 +181,7 @@ func testLogicalSmoke(t *testing.T, allowBackfill, immediate, withChaos bool) {
 	case <-time.After(time.Second):
 		a.Fail("timed out waiting for shutdown")
 	}
-	if !withChaos && !allowBackfill {
+	if !tc.withChaos && !tc.allowBackfill {
 		a.Equal(int32(1), atomic.LoadInt32(&gen.atomic.processExits))
 		a.Equal(int32(1), atomic.LoadInt32(&gen.atomic.readIntoExits))
 	}

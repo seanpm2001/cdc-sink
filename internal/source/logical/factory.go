@@ -120,6 +120,7 @@ func (f *Factory) newLoop(ctx context.Context, config *BaseConfig, dialect Diale
 		dialect = WithChaos(dialect, config.ChaosProb)
 	}
 	loop := &loop{
+		asyncErrors:     make(chan error, 1),
 		config:          config,
 		dialect:         dialect,
 		factory:         f,
@@ -145,6 +146,15 @@ func (f *Factory) newLoop(ctx context.Context, config *BaseConfig, dialect Diale
 		appliers: f.appliers,
 		loop:     loop,
 		pool:     f.pool,
+	}
+
+	if config.ShingleDepth > 0 {
+		shingle := &shingleEvents{
+			serialEvents: loop.events.serial.(*serialEvents),
+			toCommit:     make(chan *shingledTx, config.ShingleDepth),
+		}
+		go shingle.flushLoop(ctx)
+		loop.events.serial = shingle
 	}
 
 	if config.ForeignKeysEnabled {
